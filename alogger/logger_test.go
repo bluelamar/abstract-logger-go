@@ -25,13 +25,15 @@ var (
 )
 
 func TestNilTargetLocalTime(t *testing.T) {
-	logger := New(nil, true)
+	logger := New(nil, true).WithTag("status").WithTag("schedule")
 
 	logger.Errorln(errMsg)
 }
 
 func TestNilTargetUtcTime(t *testing.T) {
 	logger := New(nil, false)
+
+	logger.SetTimeLabels(":lcl:", ":utc:")
 
 	logger.Errorln(errMsg)
 }
@@ -93,56 +95,65 @@ func TestDefaultLogMessages(t *testing.T) {
 func TestNewLabelsLogMessages(t *testing.T) {
 
 	labels := []string{"INK", "DOT", "WHY", "EEL", "FUN"}
+	tags := []string{"alpha", "beta"}
+	tagsInMsg := "[alpha][beta] "
 
 	buf := new(bytes.Buffer)
 	logger := New(buf, true)
 
-	logger.SetLogLabels(labels[0], labels[1], labels[2], labels[3], labels[4])
+	for _, tag := range tags {
+		logger = logger.WithTag(tag)
+	}
+
+	err := logger.SetLogLabels(labels[0], labels[1], labels[2], labels[3], labels[4])
+	if err != nil {
+		t.Fatalf(`Expected log labels to be valid: err=%v`, err)
+	}
 
 	logger.Errorln(errMsg)
-	outMsg := labels[3] + ": " + errMsg
+	outMsg := labels[3] + ":" + tagsInMsg + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
 	}
 
 	logger.Errorf("%d - %s", 1, errMsg)
-	outMsg = labels[3] + ": 1 - " + errMsg
+	outMsg = labels[3] + ":" + tagsInMsg + "1 - " + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
 	}
 
 	logger.Warnln(errMsg)
-	outMsg = labels[2] + ": " + errMsg
+	outMsg = labels[2] + ":" + tagsInMsg + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
 	}
 
-	logger.Warnf("%d - %s", 1, errMsg)
-	outMsg = labels[2] + ": 1 - " + errMsg
+	logger.Warnf("%d - %s", 3, errMsg)
+	outMsg = labels[2] + ":" + tagsInMsg + "3 - " + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
 	}
 
 	logger.Debugln(errMsg)
-	outMsg = labels[1] + ": " + errMsg
+	outMsg = labels[1] + ":" + tagsInMsg + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
 	}
 
-	logger.Debugf("%d - %s", 1, errMsg)
-	outMsg = labels[1] + ": 1 - " + errMsg
+	logger.Debugf("%d - %s", 4, errMsg)
+	outMsg = labels[1] + ":" + tagsInMsg + "4 - " + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
 	}
 
 	logger.Infoln(errMsg)
-	outMsg = labels[0] + ": " + errMsg
+	outMsg = labels[0] + ":" + tagsInMsg + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
 	}
 
-	logger.Infof("%d - %s", 1, errMsg)
-	outMsg = labels[0] + ": 1 - " + errMsg
+	logger.Infof("%d - %s", 5, errMsg)
+	outMsg = labels[0] + ":" + tagsInMsg + "5 - " + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
 	}
