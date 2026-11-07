@@ -20,6 +20,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 )
 
 const (
@@ -33,19 +34,46 @@ const (
 	UtcTimeLabel   = "[utc]"
 )
 
+type LabelType int
+
+const (
+	InfoLabelType  LabelType = iota // 0
+	DebugLabelType                  // 1
+	WarnLabelType                   // 2
+	ErrorLabelType                  // 3
+	FatalLabelType                  // 4
+)
+
+// LoggerI provides leveled logging with configurable labels, time labels, and tags.
+// Set methods are expected to mutate the logger.
+// With methods are expected to return a new configured logger without changing the original.
+// Fatal methods log at fatal severity but may or may not exit according to implementation.
 type LoggerI interface {
 
-	// SetLogLabels allows user to over-ride default severity strings for the associated log messages.
+	// SetLogLabels allows user to override default severity strings for the associated log messages.
 	// Empty string for label is an error.
+	// An implementation is expected to mutate the logger.
 	SetLogLabels(infoLabel, debugLabel, warnLabel, errorLabel, fatalLabel string) error
 
 	// SetTimeLabels allows user to over-ride default date/time labels for the log messages.
+	// Default labels are: LocalTimeLabel and UtcTimeLabel.
+	// An implementation is expected to mutate the logger.
 	SetTimeLabels(localTimeLabel, utcTimeLabel string)
+
+	// WithLogLabels allows user to over-ride default severity strings for the associated log messages.
+	// Empty string for label is an error.
+	// An implementation Should be Concurrency safe, returning a new LoggerI that will use the labels.
+	WithLogLabels(infoLabel, debugLabel, warnLabel, errorLabel, fatalLabel string) (LoggerI, error)
+
+	// WithTimeLabels allows user to over-ride default date/time labels for the log messages.
+	// An implementation Should be Concurrency safe, returning a new LoggerI that will use the labels.
+	WithTimeLabels(localTimeLabel, utcTimeLabel string) LoggerI
 
 	// WithTag allows user to specify a tag that will be prefixed to all log messages.
 	// Multiple tags may be added to the logger.
-	// For example, tag could represent a component called "status", inwhich case the
+	// For example, tag could represent a component called "status", in which case the
 	// string "[status]" would be prefixed to the message after the severity label.
+	// An implementation Should be Concurrency safe, returning a new LoggerI that will use the tag.
 	WithTag(tag string) LoggerI
 
 	Infof(format string, args ...interface{})
@@ -60,11 +88,14 @@ type LoggerI interface {
 	Errorf(format string, args ...interface{})
 	Errorln(args ...interface{})
 
+	// Fatalf logs at fatal severity - it may or may not terminate the process according to implementation.
 	Fatalf(format string, args ...interface{})
+	// Fatalln logs at fatal severity - it may or may not terminate the process according to implementation.
 	Fatalln(args ...interface{})
 }
 
 type defaultLogger struct {
+	mu       *sync.RWMutex
 	infoLbl  string
 	debugLbl string
 	warnLbl  string
@@ -92,6 +123,7 @@ func New(target io.Writer, localTime bool) LoggerI {
 	l := log.New(target, "", logFlags)
 
 	return &defaultLogger{
+		mu:       new(sync.RWMutex),
 		infoLbl:  InfoLabel,
 		debugLbl: DebugLabel,
 		warnLbl:  WarnLabel,
@@ -104,9 +136,18 @@ func New(target io.Writer, localTime bool) LoggerI {
 	}
 }
 
+// clone is used by the With methods to make changes to the logger safe.
+func (d *defaultLogger) clone() *defaultLogger {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	clone := *d
+	return &clone
+}
+
 // SetLogLabels allows user to over-ride default labels for the associated log messages.
 // Empty string for label is an error.
-func (d *defaultLogger) SetLogLabels(infoLabel, debugLabel, warnLabel, errorLabel, fatalLabel string) error {
+func (d *defaultLogger) setLogLabels(infoLabel, debugLabel, warnLabel, errorLabel, fatalLabel string) error {
 	if infoLabel == "" {
 		return errors.New("invalid info label specified")
 	}
@@ -135,8 +176,20 @@ func (d *defaultLogger) SetLogLabels(infoLabel, debugLabel, warnLabel, errorLabe
 	return nil
 }
 
-// SetTimeLabels allows user to over-ride default date/time labels for the log messages.
-func (d *defaultLogger) SetTimeLabels(localTimeLabel, utcTimeLabel string) {
+func (d *defaultLogger) SetLogLabels(infoLabel, debugLabel, warnLabel, errorLabel, fatalLabel string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.setLogLabels(infoLabel, debugLabel, warnLabel, errorLabel, fatalLabel)
+}
+
+func (d *defaultLogger) WithLogLabels(infoLabel, debugLabel, warnLabel, errorLabel, fatalLabel string) (LoggerI, error) {
+	clone := d.clone()
+	return clone, clone.setLogLabels(infoLabel, debugLabel, warnLabel, errorLabel, fatalLabel)
+}
+
+// SetTimeLabels allows user to override default date/time labels for the log messages.
+func (d *defaultLogger) setTimeLabels(localTimeLabel, utcTimeLabel string) {
 	if d.dtLocal {
 		d.dtLabel = localTimeLabel
 	} else {
@@ -144,68 +197,101 @@ func (d *defaultLogger) SetTimeLabels(localTimeLabel, utcTimeLabel string) {
 	}
 }
 
+func (d *defaultLogger) SetTimeLabels(localTimeLabel, utcTimeLabel string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.setTimeLabels(localTimeLabel, utcTimeLabel)
+}
+
+func (d *defaultLogger) WithTimeLabels(localTimeLabel, utcTimeLabel string) LoggerI {
+	clone := d.clone()
+	clone.setTimeLabels(localTimeLabel, utcTimeLabel)
+
+	return clone
+}
+
 // WithTag allows user to specify a tag that will be prefixed to all log messages.
 // Multiple tags may be added to the logger.
 func (d *defaultLogger) WithTag(tag string) LoggerI {
+	clone := d.clone()
 	if tag == "" {
-		return d
+		return clone
 	}
 
-	if d.tags == "" {
-		d.tags = "[" + tag + "]"
+	if clone.tags == "" {
+		clone.tags = "[" + tag + "]"
 	} else {
-		d.tags = fmt.Sprintf("%s[%s]", d.tags, tag)
+		clone.tags = fmt.Sprintf("%s[%s]", clone.tags, tag)
 	}
 
-	return d
+	return clone
 }
 
 func (d *defaultLogger) Infof(format string, args ...interface{}) {
-	d.print(d.infoLbl, fmt.Sprintf(format, args...))
+	d.print(InfoLabelType, fmt.Sprintf(format, args...))
 }
 
 func (d *defaultLogger) Infoln(args ...interface{}) {
-	d.print(d.infoLbl, fmt.Sprintln(args...))
+	d.print(InfoLabelType, fmt.Sprintln(args...))
 }
 
 func (d *defaultLogger) Debugf(format string, args ...interface{}) {
-	d.print(d.debugLbl, fmt.Sprintf(format, args...))
+	d.print(DebugLabelType, fmt.Sprintf(format, args...))
 }
 
 func (d *defaultLogger) Debugln(args ...interface{}) {
-	d.print(d.debugLbl, fmt.Sprintln(args...))
+	d.print(DebugLabelType, fmt.Sprintln(args...))
 }
 
 func (d *defaultLogger) Warnf(format string, args ...interface{}) {
-	d.print(d.warnLbl, fmt.Sprintf(format, args...))
+	d.print(WarnLabelType, fmt.Sprintf(format, args...))
 }
 
 func (d *defaultLogger) Warnln(args ...interface{}) {
-	d.print(d.warnLbl, fmt.Sprintln(args...))
+	d.print(WarnLabelType, fmt.Sprintln(args...))
 }
 
 func (d *defaultLogger) Errorf(format string, args ...interface{}) {
-	d.print(d.errorLbl, fmt.Sprintf(format, args...))
+	d.print(ErrorLabelType, fmt.Sprintf(format, args...))
 }
 
 func (d *defaultLogger) Errorln(args ...interface{}) {
-	d.print(d.errorLbl, fmt.Sprintln(args...))
+	d.print(ErrorLabelType, fmt.Sprintln(args...))
 }
 
+// Fatalf logs at fatal severity - it does not terminate the process.
 func (d *defaultLogger) Fatalf(format string, args ...interface{}) {
-	d.print(d.fatalLbl, fmt.Sprintf(format, args...))
-	os.Exit(1)
+	d.print(FatalLabelType, fmt.Sprintf(format, args...))
 }
 
+// Fatalln logs at fatal severity - it does not terminate the process.
 func (d *defaultLogger) Fatalln(args ...interface{}) {
-	d.print(d.fatalLbl, fmt.Sprintln(args...))
-	os.Exit(1)
+	d.print(FatalLabelType, fmt.Sprintln(args...))
 }
 
-func (d *defaultLogger) print(label, msg string) {
+func (d *defaultLogger) print(labelType LabelType, msg string) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var label string
+
+	switch labelType {
+	case InfoLabelType:
+		label = d.infoLbl
+	case DebugLabelType:
+		label = d.debugLbl
+	case WarnLabelType:
+		label = d.warnLbl
+	case ErrorLabelType:
+		label = d.errorLbl
+	case FatalLabelType:
+		label = d.fatalLbl
+	}
+
 	if d.tags == "" {
-		d.logger.Println(d.dtLabel + " " + label + ": " + msg)
+		d.logger.Print(d.dtLabel + " " + label + ": " + msg)
 	} else {
-		d.logger.Println(d.dtLabel + " " + label + ":" + d.tags + " " + msg)
+		d.logger.Print(d.dtLabel + " " + label + ":" + d.tags + " " + msg)
 	}
 }

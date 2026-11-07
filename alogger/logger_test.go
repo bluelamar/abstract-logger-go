@@ -21,21 +21,37 @@ import (
 )
 
 var (
-	errMsg = "bad thing happened"
+	errMsg  = "bad something happened"
+	errMsg1 = "bad thing happened"
+	errMsg2 = "another bad thing happened"
 )
 
 func TestNilTargetLocalTime(t *testing.T) {
 	logger := New(nil, true).WithTag("status").WithTag("schedule")
 
-	logger.Errorln(errMsg)
+	logger.Errorln(errMsg1)
+}
+
+func TestNilTargetLocalTimeWithTimeLabels(t *testing.T) {
+	logger := New(nil, true).WithTag("status").WithTag("schedule")
+
+	logger.SetTimeLabels(":lcl:", ":utc:")
+
+	logger.Errorln(errMsg1)
 }
 
 func TestNilTargetUtcTime(t *testing.T) {
 	logger := New(nil, false)
 
+	logger.Errorln(errMsg2)
+}
+
+func TestNilTargetUtcTimeWithTimeLabels(t *testing.T) {
+	logger := New(nil, false)
+
 	logger.SetTimeLabels(":lcl:", ":utc:")
 
-	logger.Errorln(errMsg)
+	logger.Errorln(errMsg2)
 }
 
 func TestDefaultLogMessages(t *testing.T) {
@@ -89,6 +105,39 @@ func TestDefaultLogMessages(t *testing.T) {
 	outMsg = InfoLabel + ": 1 - " + errMsg
 	if !strings.Contains(buf.String(), outMsg) {
 		t.Fatalf(`Expected logger buffer(%s) equal to msg(%s)`, buf.String(), outMsg)
+	}
+}
+
+func TestLnMethodsWriteSingleNewline(t *testing.T) {
+	buf := new(bytes.Buffer)
+	logger := New(buf, true)
+
+	logger.Infoln("first", "second")
+
+	if got := strings.Count(buf.String(), "\n"); got != 1 {
+		t.Fatalf("Expected one newline, got %d in %q", got, buf.String())
+	}
+	if !strings.HasSuffix(buf.String(), InfoLabel+": first second\n") {
+		t.Fatalf("Unexpected log message: %q", buf.String())
+	}
+}
+
+func TestFatalMethodsLogWithoutExiting(t *testing.T) {
+	buf := new(bytes.Buffer)
+	logger := New(buf, true)
+
+	logger.Fatalf("fatal %s", "formatted")
+	logger.Fatalln("fatal", "line")
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("Expected two fatal log lines, got %d in %q", len(lines), buf.String())
+	}
+	if !strings.HasSuffix(lines[0], FatalLabel+": fatal formatted") {
+		t.Errorf("Unexpected Fatalf output: %q", lines[0])
+	}
+	if !strings.HasSuffix(lines[1], FatalLabel+": fatal line") {
+		t.Errorf("Unexpected Fatalln output: %q", lines[1])
 	}
 }
 
